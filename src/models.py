@@ -100,6 +100,44 @@ class ResumeDocument(ABC):
     @abstractmethod
     def document_type(self) -> str:
         """Return the document category used for persistence."""
+    
+    def to_dict(self) -> dict:
+        return {
+            "preamble": self.preamble,
+            "header": self.header,
+            "trailing": self.trailing,
+            "sections": [section.to_dict() for section in self.sections],
+        }
+    
+    @classmethod
+    def from_dict(cls, raw: dict) -> "ResumeDocument | None":
+        preamble = raw.get("preamble")
+        if not isinstance(preamble, str):
+            preamble = None
+
+        header = raw.get("header")
+        if not isinstance(header, str):
+            header = None
+            
+        trailing = raw.get("trailing", str)
+        if not isinstance(trailing, str):
+            trailing = None
+
+        raw_sections = raw.get("sections")
+        sections: list[Section] = []
+        if isinstance(raw_sections, list):
+            for raw_section in raw_sections:
+                if isinstance(raw_section, dict):
+                    section = Section.from_dict(raw_section)
+                    if section:
+                        sections.append(section)
+
+        return cls(
+            preamble=preamble,
+            header=header,
+            trailing=trailing,
+            sections=sections
+        )
 
 
 def _normalize_path(path: str) -> str:
@@ -167,99 +205,43 @@ def validate_generated_subset(source: SourceFile, generated: GeneratedFile) -> N
 
 
 @dataclass
-class LinkRecord:
-    """Persisted link between one source document and one generated document."""
+class LinkLibrary:
+    """Library of LinkRecords"""
 
     source_path: str
-    target_path: str
-    metadata_path: str
-    sections: dict[str, list[str]] = field(default_factory=dict)
-    updated_at: str = field(default_factory=_utc_now_iso)
-    schema_version: int = 1
+    source_file: SourceFile
+    links: dict[str, GeneratedFile] = field(default_factory=dict) # keyed by generated file path
 
-    def __post_init__(self) -> None:
-        self.source_path = _normalize_path(self.source_path)
-        self.target_path = _normalize_path(self.target_path)
-        self.metadata_path = _normalize_path(self.metadata_path)
-
-    @staticmethod
-    def default_metadata_path(target_path: str) -> str:
-        target_abs = Path(_normalize_path(target_path))
-        return str(target_abs.parent / f"{target_abs.name}.resume-link.json")
-
-    @classmethod
-    def from_documents(
-        cls,
-        source: SourceFile,
-        generated: GeneratedFile,
-        metadata_path: str | None = None,
-    ) -> "LinkRecord":
-        validate_generated_subset(source, generated)
-
-        sections: dict[str, list[str]] = {}
-        for section in generated.sections:
-            sections[section.name] = [entry.display_label for entry in section.entries]
-
-        return cls(
-            source_path=source.path,
-            target_path=generated.path,
-            metadata_path=metadata_path or cls.default_metadata_path(generated.path),
-            sections=sections,
-            updated_at=_utc_now_iso(),
-        )
-
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict: 
         return {
-            "schema_version": self.schema_version,
-            "updated_at": self.updated_at,
-            "source": {"path": self.source_path},
-            "target": {
-                "path": self.target_path,
-                "sections": [
-                    {"name": section_name, "entries": list(entry_labels)}
-                    for section_name, entry_labels in self.sections.items()
-                ],
-            },
+            "source_path": self.source_path,
+            "source_file": self.source_file.to_dict(),
+            "links": {gen_path: gen_file.to_dict() for gen_path, gen_file in self.links.items()},
         }
-
+    
     @classmethod
-    def from_dict(cls, data: dict, metadata_path: str) -> "LinkRecord":
-        raw_source = data.get("source", {})
-        raw_target = data.get("target", {})
-        source_path = raw_source.get("path")
-        target_path = raw_target.get("path")
-        if not isinstance(source_path, str) or not isinstance(target_path, str):
-            raise ValueError("Invalid link record payload: missing source/target path")
-
-        sections: dict[str, list[str]] = {}
-        raw_sections = raw_target.get("sections", [])
-        if isinstance(raw_sections, list):
-            for raw_section in raw_sections:
-                if not isinstance(raw_section, dict):
+    def from_dict(cls, raw: dict) -> "LinkLibrary | None":
+        path = raw.get("source_path")
+        raw_file = raw.get("source_file")
+        if isinstance(raw_file, dict):
+            source_file = ResumeDocument.from_dict(raw_file) 
+        
+        raw_links = raw.get("links")
+        links: dict[str, GeneratedFile] = {}
+        if isinstance(raw_links, dict):
+            for gen_path, raw_gen_file in raw_links.items():
+                if not isinstance(gen_path, str) or not isinstance(raw_gen_file, dict):
                     continue
-                section_name = raw_section.get("name")
-                if not isinstance(section_name, str) or not section_name.strip():
-                    continue
-                raw_entries = raw_section.get("entries", [])
-                entry_labels: list[str] = []
-                if isinstance(raw_entries, list):
-                    for label in raw_entries:
-                        if isinstance(label, str):
-                            entry_labels.append(label)
-                sections[section_name] = entry_labels
-
-        raw_schema_version = data.get("schema_version", 1)
-        schema_version = int(raw_schema_version) if isinstance(raw_schema_version, (int, float)) else 1
-
-        updated_at = data.get("updated_at")
-        if not isinstance(updated_at, str):
-            updated_at = _utc_now_iso()
+                raw_gen_file = ResumeDocument.from_dict(raw_gen_file)
+                if raw_gen_file is not None:
+                    gen_file = ResumeDocument.from_dict(raw_gen_file)
+                    if gen_file is not None:
+                        links[gen_path] = gen_file
 
         return cls(
-            source_path=source_path,
-            target_path=target_path,
-            metadata_path=metadata_path,
-            sections=sections,
-            updated_at=updated_at,
-            schema_version=schema_version,
+            source_path=path,
+            source_file=source_file,
+            links=links,
         )
+        
+        

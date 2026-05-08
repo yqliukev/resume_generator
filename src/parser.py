@@ -1,5 +1,5 @@
 import re
-from models import Entry, Section, ResumeDocument
+from models import Entry, Section, SourceFile
 
 
 # ---------------------------------------------------------------------------
@@ -380,7 +380,7 @@ def parse_section_chunk(header_lines: list[str], content_lines: list[str]) -> Se
     )
 
 
-def parse_file(path: str) -> ResumeDocument:
+def parse_file(path: str) -> SourceFile:
     with open(path, encoding='utf-8') as f:
         lines = f.readlines()
 
@@ -388,7 +388,8 @@ def parse_file(path: str) -> ResumeDocument:
     chunks = section_split(body_lines)
     sections = [parse_section_chunk(hl, cl) for hl, cl in chunks]
 
-    return ResumeDocument(
+    return SourceFile(
+        path=path,
         preamble=preamble,
         header=header,
         sections=sections,
