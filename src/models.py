@@ -109,39 +109,35 @@ class ResumeDocument(ABC):
             "sections": [section.to_dict() for section in self.sections],
         }
     
-    @classmethod
-    def from_dict(cls, raw: dict) -> "ResumeDocument | None":
-        preamble = raw.get("preamble")
-        if not isinstance(preamble, str):
-            preamble = None
-
-        header = raw.get("header")
-        if not isinstance(header, str):
-            header = None
-            
-        trailing = raw.get("trailing", str)
-        if not isinstance(trailing, str):
-            trailing = None
-
-        raw_sections = raw.get("sections")
-        sections: list[Section] = []
-        if isinstance(raw_sections, list):
-            for raw_section in raw_sections:
-                if isinstance(raw_section, dict):
-                    section = Section.from_dict(raw_section)
-                    if section:
-                        sections.append(section)
-
-        return cls(
-            preamble=preamble,
-            header=header,
-            trailing=trailing,
-            sections=sections
-        )
-
-
 def _normalize_path(path: str) -> str:
+    if not path:
+        return ""
     return str(Path(path).expanduser().resolve(strict=False))
+
+
+def _document_fields_from_dict(raw: dict) -> tuple[str | None, str | None, str | None, list[Section]]:
+    preamble = raw.get("preamble")
+    if not isinstance(preamble, str):
+        preamble = None
+
+    header = raw.get("header")
+    if not isinstance(header, str):
+        header = None
+
+    trailing = raw.get("trailing")
+    if not isinstance(trailing, str):
+        trailing = None
+
+    raw_sections = raw.get("sections")
+    sections: list[Section] = []
+    if isinstance(raw_sections, list):
+        for raw_section in raw_sections:
+            if isinstance(raw_section, dict):
+                section = Section.from_dict(raw_section)
+                if section is not None:
+                    sections.append(section)
+
+    return preamble, header, trailing, sections
 
 
 def _utc_now_iso() -> str:
@@ -155,6 +151,28 @@ class SourceFile(ResumeDocument):
     def __post_init__(self) -> None:
         self.path = _normalize_path(self.path)
 
+    def to_dict(self) -> dict:
+        data = super().to_dict()
+        data["path"] = self.path
+        data["document_type"] = self.document_type
+        return data
+
+    @classmethod
+    def from_dict(cls, raw: dict) -> "SourceFile | None":
+        if not isinstance(raw, dict):
+            return None
+        preamble, header, trailing, sections = _document_fields_from_dict(raw)
+        path = raw.get("path")
+        if not isinstance(path, str):
+            path = ""
+        return cls(
+            path=path,
+            preamble=preamble or "",
+            header=header or "",
+            sections=sections,
+            trailing=trailing or "",
+        )
+
     @property
     def document_type(self) -> str:
         return "source"
@@ -166,6 +184,28 @@ class GeneratedFile(ResumeDocument):
 
     def __post_init__(self) -> None:
         self.path = _normalize_path(self.path)
+
+    def to_dict(self) -> dict:
+        data = super().to_dict()
+        data["path"] = self.path
+        data["document_type"] = self.document_type
+        return data
+
+    @classmethod
+    def from_dict(cls, raw: dict) -> "GeneratedFile | None":
+        if not isinstance(raw, dict):
+            return None
+        preamble, header, trailing, sections = _document_fields_from_dict(raw)
+        path = raw.get("path")
+        if not isinstance(path, str):
+            path = ""
+        return cls(
+            path=path,
+            preamble=preamble or "",
+            header=header or "",
+            sections=sections,
+            trailing=trailing or "",
+        )
 
     @property
     def document_type(self) -> str:
@@ -204,6 +244,62 @@ def validate_generated_subset(source: SourceFile, generated: GeneratedFile) -> N
                 )
 
 
+def default_link_library_path(source_path: str) -> str:
+    source_abs = _normalize_path(source_path)
+    if not source_abs:
+        return ""
+    source_file = Path(source_abs)
+    return str(source_file.with_name(f"{source_file.stem}.resume-links.json"))
+
+
+def merge_source_document(current: SourceFile, template: SourceFile | None = None) -> SourceFile:
+    if template is None:
+        return SourceFile.from_dict(current.to_dict()) or current
+
+    template_sections = {section.name: section for section in template.sections}
+    merged_sections: list[Section] = []
+
+    for current_section in current.sections:
+        template_section = template_sections.get(current_section.name)
+        selected = template_section.selected if template_section is not None else False
+
+        template_entries = {
+            entry.display_label: entry for entry in template_section.entries
+        } if template_section is not None else {}
+        merged_entries: list[Entry] = []
+
+        for current_entry in current_section.entries:
+            template_entry = template_entries.get(current_entry.display_label)
+            entry_selected = template_entry.selected if template_entry is not None else False
+            merged_entries.append(
+                Entry(
+                    display_label=current_entry.display_label,
+                    raw_text=current_entry.raw_text,
+                    selected=entry_selected,
+                )
+            )
+
+        merged_sections.append(
+            Section(
+                name=current_section.name,
+                section_type=current_section.section_type,
+                raw_header=current_section.raw_header,
+                list_prefix=current_section.list_prefix,
+                list_suffix=current_section.list_suffix,
+                entries=merged_entries,
+                selected=selected,
+            )
+        )
+
+    return SourceFile(
+        path=current.path,
+        preamble=current.preamble,
+        header=current.header,
+        sections=merged_sections,
+        trailing=current.trailing,
+    )
+
+
 @dataclass
 class LinkLibrary:
     """Library of LinkRecords"""
@@ -221,27 +317,107 @@ class LinkLibrary:
     
     @classmethod
     def from_dict(cls, raw: dict) -> "LinkLibrary | None":
-        path = raw.get("source_path")
+        if not isinstance(raw, dict):
+            return None
+
         raw_file = raw.get("source_file")
-        if isinstance(raw_file, dict):
-            source_file = ResumeDocument.from_dict(raw_file) 
-        
-        raw_links = raw.get("links")
+        if not isinstance(raw_file, dict):
+            return None
+
+        source_file = SourceFile.from_dict(raw_file)
+        if source_file is None:
+            return None
+
+        source_path = raw.get("source_path")
+        if not isinstance(source_path, str):
+            source_path = source_file.path
+
         links: dict[str, GeneratedFile] = {}
+        raw_links = raw.get("links")
         if isinstance(raw_links, dict):
             for gen_path, raw_gen_file in raw_links.items():
                 if not isinstance(gen_path, str) or not isinstance(raw_gen_file, dict):
                     continue
-                raw_gen_file = ResumeDocument.from_dict(raw_gen_file)
-                if raw_gen_file is not None:
-                    gen_file = ResumeDocument.from_dict(raw_gen_file)
-                    if gen_file is not None:
-                        links[gen_path] = gen_file
+                gen_file = GeneratedFile.from_dict({**raw_gen_file, "path": gen_path})
+                if gen_file is not None:
+                    links[gen_path] = gen_file
 
         return cls(
-            source_path=path,
+            source_path=source_path,
             source_file=source_file,
             links=links,
         )
+
+    @classmethod
+    def empty_for_source(cls, source_file: SourceFile) -> "LinkLibrary":
+        return cls(
+            source_path=source_file.path,
+            source_file=source_file,
+            links={},
+        )
+
+    def update_source_file(self, source_file: SourceFile) -> None:
+        self.source_file = source_file
+        self.source_path = self.source_file.path
+
+    def add_generated_file(self, generated_file: GeneratedFile) -> None:
+        validate_generated_subset(self.source_file, generated_file)
+        self.links[generated_file.path] = generated_file
+
+    def create_generated_file(self, output_path: str, template: GeneratedFile | None = None) -> GeneratedFile:
+        source = self.source_file
+        template_sections = {section.name: section for section in template.sections} if template else {}
+        sections: list[Section] = []
+
+        for source_section in source.sections:
+            template_section = template_sections.get(source_section.name)
+            selected = template_section.selected if template_section is not None else source_section.selected
+            if template is not None and template_section is None:
+                selected = False
+
+            template_entries = {
+                entry.display_label: entry for entry in template_section.entries
+            } if template_section is not None else {}
+            entries: list[Entry] = []
+
+            for source_entry in source_section.entries:
+                template_entry = template_entries.get(source_entry.display_label)
+                entry_selected = template_entry.selected if template_entry is not None else source_entry.selected
+                if template is not None and template_entry is None:
+                    entry_selected = False
+
+                entries.append(
+                    Entry(
+                        display_label=source_entry.display_label,
+                        raw_text=source_entry.raw_text,
+                        selected=entry_selected,
+                    )
+                )
+
+            sections.append(
+                Section(
+                    name=source_section.name,
+                    section_type=source_section.section_type,
+                    raw_header=source_section.raw_header,
+                    list_prefix=source_section.list_prefix,
+                    list_suffix=source_section.list_suffix,
+                    entries=entries,
+                    selected=selected,
+                )
+            )
+
+        return GeneratedFile(
+            path=output_path,
+            preamble=source.preamble,
+            header=source.header,
+            sections=sections,
+            trailing=source.trailing,
+        )
+
+    def refresh_generated_files(self) -> None:
+        refreshed: dict[str, GeneratedFile] = {}
+        for gen_path, generated_file in self.links.items():
+            refreshed[gen_path] = self.create_generated_file(gen_path, template=generated_file)
+        self.links = refreshed
         
         
