@@ -52,22 +52,27 @@ class App(ctk.CTk):
         top = ctk.CTkFrame(self, corner_radius=0)
         top.grid(row=0, column=0, sticky="ew", padx=8, pady=(8, 4))
 
-        top.grid_columnconfigure(1, weight=1)
-        top.grid_columnconfigure(3, weight=1)
+        top.grid_columnconfigure(2, weight=1)
+        top.grid_columnconfigure(4, weight=1)
 
         ctk.CTkButton(
             top, text="Upload Source File", width=150, command=self._open_source_file
         ).grid(row=0, column=0, padx=(8, 8), pady=6, sticky="w")
 
+        self.refresh_btn = ctk.CTkButton(
+            top, text="↻", width=42, command=self._refresh_source_file, state="disabled"
+        )
+        self.refresh_btn.grid(row=0, column=1, padx=(0, 8), pady=6, sticky="w")
+
         self.file_label = ctk.CTkLabel(top, text="Source: none", anchor="w")
-        self.file_label.grid(row=0, column=1, sticky="ew", padx=(0, 10), pady=6)
+        self.file_label.grid(row=0, column=2, sticky="ew", padx=(0, 10), pady=6)
 
         ctk.CTkButton(
             top, text="Upload Link Library", width=170, command=self._open_link_library
-        ).grid(row=0, column=2, padx=(8, 8), pady=6, sticky="w")
+        ).grid(row=0, column=3, padx=(8, 8), pady=6, sticky="w")
 
         self.library_label = ctk.CTkLabel(top, text="Library: none", anchor="w")
-        self.library_label.grid(row=0, column=3, sticky="ew", padx=(0, 8), pady=6)
+        self.library_label.grid(row=0, column=4, sticky="ew", padx=(0, 8), pady=6)
 
         # ── Main content (left tree | right preview) ─────────────────
         content = ctk.CTkFrame(self, corner_radius=0, fg_color="transparent")
@@ -152,21 +157,14 @@ class App(ctk.CTk):
     # File open
     # ------------------------------------------------------------------
 
-    def _open_source_file(self):
-        path = filedialog.askopenfilename(
-            title="Open LaTeX Source File",
-            filetypes=[("LaTeX files", "*.tex"), ("All files", "*.*")],
-        )
-        if not path:
-            return
-
+    def _load_source_file(self, path: str, *, reset_output_fields: bool):
         self._set_status("Parsing source file…")
         try:
             parsed_source = parse_file(path)
         except Exception as exc:
             messagebox.showerror("Parse error", str(exc))
             self._set_status(f"Error: {exc}")
-            return
+            return False
 
         source_path = os.path.abspath(path)
         keep_library = self.link_library is not None and self.link_library.source_path == source_path
@@ -184,11 +182,35 @@ class App(ctk.CTk):
         else:
             self.library_label.configure(text="Library: none")
 
-        self._set_default_output_fields(source_path)
+        if reset_output_fields:
+            self._set_default_output_fields(source_path)
 
         self._build_tree()
         self._set_controls_enabled(True)
+        self.refresh_btn.configure(state="normal")
+        return True
+
+    def _open_source_file(self):
+        path = filedialog.askopenfilename(
+            title="Open LaTeX Source File",
+            filetypes=[("LaTeX files", "*.tex"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+
+        if not self._load_source_file(path, reset_output_fields=True):
+            return
         self._set_status("Source loaded")
+
+    def _refresh_source_file(self):
+        if not self.file_path:
+            messagebox.showwarning("No source file", "Please upload a source file first.")
+            return
+
+        if not self._load_source_file(self.file_path, reset_output_fields=False):
+            return
+
+        self._set_status("Source refreshed")
 
     def _open_link_library(self):
         path = filedialog.askopenfilename(
@@ -369,6 +391,7 @@ class App(ctk.CTk):
 
     def _set_controls_enabled(self, enabled: bool):
         state = "normal" if enabled else "disabled"
+        self.refresh_btn.configure(state=state if self.file_path else "disabled")
         self.update_links_btn.configure(state=state)
         self.generate_btn.configure(state=state)
 
@@ -384,7 +407,7 @@ class App(ctk.CTk):
         self.output_dir_entry.insert(0, source_dir)
 
         self.output_name_entry.delete(0, "end")
-        self.output_name_entry.insert(0, f"{source_name}_generated.tex")
+        self.output_name_entry.insert(0, f"{source_name}.tex")
 
     def _browse_output_dir(self):
         initial_dir = self.output_dir_entry.get().strip() or (
