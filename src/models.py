@@ -181,13 +181,16 @@ class SourceFile(ResumeDocument):
 @dataclass
 class GeneratedFile(ResumeDocument):
     path: str = ""
+    pdf_path: str = ""
 
     def __post_init__(self) -> None:
         self.path = _normalize_path(self.path)
+        self.pdf_path = _normalize_path(self.pdf_path)
 
     def to_dict(self) -> dict:
         data = super().to_dict()
         data["path"] = self.path
+        data["pdf_path"] = self.pdf_path
         data["document_type"] = self.document_type
         return data
 
@@ -199,8 +202,12 @@ class GeneratedFile(ResumeDocument):
         path = raw.get("path")
         if not isinstance(path, str):
             path = ""
+        pdf_path = raw.get("pdf_path")
+        if not isinstance(pdf_path, str):
+            pdf_path = ""
         return cls(
             path=path,
+            pdf_path=pdf_path,
             preamble=preamble or "",
             header=header or "",
             sections=sections,
@@ -364,7 +371,14 @@ class LinkLibrary:
         validate_generated_subset(self.source_file, generated_file)
         self.links[generated_file.path] = generated_file
 
-    def create_generated_file(self, output_path: str, template: GeneratedFile | None = None) -> GeneratedFile:
+    def create_generated_file(
+        self,
+        output_path: str,
+        template: GeneratedFile | None = None,
+        generate_pdf: bool = False,
+    ) -> GeneratedFile:
+        from assembler import assemble, compile_pdf, write_tex
+
         source = self.source_file
         template_sections = {section.name: section for section in template.sections} if template else {}
         sections: list[Section] = []
@@ -406,7 +420,7 @@ class LinkLibrary:
                 )
             )
 
-        return GeneratedFile(
+        generated_file = GeneratedFile(
             path=output_path,
             preamble=source.preamble,
             header=source.header,
@@ -414,10 +428,26 @@ class LinkLibrary:
             trailing=source.trailing,
         )
 
+        write_tex(assemble(generated_file), output_path)
+
+        if generate_pdf:
+            output_dir = str(Path(output_path).parent)
+            success, log = compile_pdf(output_path, output_dir)
+            if not success:
+                raise RuntimeError(f"PDF generation failed for {output_path}\n{log}")
+            write_tex(assemble(generated_file), output_path)
+            generated_file.pdf_path = str(Path(output_path).with_suffix(".pdf"))
+
+        return generated_file
+
     def refresh_generated_files(self) -> None:
         refreshed: dict[str, GeneratedFile] = {}
         for gen_path, generated_file in self.links.items():
-            refreshed[gen_path] = self.create_generated_file(gen_path, template=generated_file)
+            refreshed[gen_path] = self.create_generated_file(
+                gen_path,
+                template=generated_file,
+                generate_pdf=bool(generated_file.pdf_path),
+            )
         self.links = refreshed
         
         

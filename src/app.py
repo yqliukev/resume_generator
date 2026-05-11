@@ -1,13 +1,21 @@
 import os
-import threading
 import tkinter
 from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
 
+from models import (
+    SourceFile,
+    LinkLibrary,
+    merge_source_document,
+    default_link_library_path
+)
 from parser import parse_file
-from assembler import assemble, write_tex, compile_pdf
-from persistence_v2 import parse_and_persist_source_document, persist_link_for_selected_output
+from persistence_v2 import (
+    load_link_library,
+    save_link_library,
+    update_library_source_file,
+)
 
 
 class App(ctk.CTk):
@@ -19,6 +27,8 @@ class App(ctk.CTk):
 
         self.doc = None
         self.file_path: str | None = None
+        self.link_library = None
+        self.library_path: str | None = None
 
         # State maps: keyed by section index / (section_idx, entry_idx)
         self.section_vars: dict[int, tkinter.IntVar] = {}
@@ -28,7 +38,6 @@ class App(ctk.CTk):
         self._section_cb_refs: list = []
         self._entry_cb_refs: list[list] = []
 
-        self._generating = False
         self._build_ui()
 
     # ------------------------------------------------------------------
@@ -43,12 +52,22 @@ class App(ctk.CTk):
         top = ctk.CTkFrame(self, corner_radius=0)
         top.grid(row=0, column=0, sticky="ew", padx=8, pady=(8, 4))
 
-        ctk.CTkButton(
-            top, text="Open File", width=110, command=self._open_file
-        ).pack(side="left", padx=(8, 8), pady=6)
+        top.grid_columnconfigure(1, weight=1)
+        top.grid_columnconfigure(3, weight=1)
 
-        self.file_label = ctk.CTkLabel(top, text="No file open", anchor="w")
-        self.file_label.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        ctk.CTkButton(
+            top, text="Upload Source File", width=150, command=self._open_source_file
+        ).grid(row=0, column=0, padx=(8, 8), pady=6, sticky="w")
+
+        self.file_label = ctk.CTkLabel(top, text="Source: none", anchor="w")
+        self.file_label.grid(row=0, column=1, sticky="ew", padx=(0, 10), pady=6)
+
+        ctk.CTkButton(
+            top, text="Upload Link Library", width=170, command=self._open_link_library
+        ).grid(row=0, column=2, padx=(8, 8), pady=6, sticky="w")
+
+        self.library_label = ctk.CTkLabel(top, text="Library: none", anchor="w")
+        self.library_label.grid(row=0, column=3, sticky="ew", padx=(0, 8), pady=6)
 
         # ── Main content (left tree | right preview) ─────────────────
         content = ctk.CTkFrame(self, corner_radius=0, fg_color="transparent")
@@ -88,76 +107,135 @@ class App(ctk.CTk):
         bottom.grid_columnconfigure(1, weight=1)
 
         ctk.CTkLabel(bottom, text="Output folder:").grid(
-            row=0, column=0, padx=(10, 6), pady=6, sticky="w"
+            row=0, column=0, padx=(10, 6), pady=(8, 4), sticky="w"
         )
-        self.output_dir_entry = ctk.CTkEntry(
-            bottom, placeholder_text="/path/to/output/folder"
+        self.output_dir_entry = ctk.CTkEntry(bottom, placeholder_text="/path/to/output/folder")
+        self.output_dir_entry.grid(row=0, column=1, sticky="ew", padx=4, pady=(8, 4))
+        ctk.CTkButton(bottom, text="Browse", width=90, command=self._browse_output_dir).grid(
+            row=0, column=2, padx=(4, 10), pady=(8, 4)
         )
-        self.output_dir_entry.grid(row=0, column=1, sticky="ew", padx=4, pady=6)
-        ctk.CTkButton(
-            bottom, text="Browse", width=90, command=self._browse_output_dir
-        ).grid(row=0, column=2, padx=(4, 10), pady=6)
 
         ctk.CTkLabel(bottom, text="Output file name:").grid(
-            row=1, column=0, padx=(10, 6), pady=6, sticky="w"
+            row=1, column=0, padx=(10, 6), pady=4, sticky="w"
         )
-        self.output_name_entry = ctk.CTkEntry(
-            bottom, placeholder_text="output.tex"
-        )
-        self.output_name_entry.grid(row=1, column=1, sticky="ew", padx=4, pady=6)
+        self.output_name_entry = ctk.CTkEntry(bottom, placeholder_text="generated.tex")
+        self.output_name_entry.grid(row=1, column=1, sticky="ew", padx=4, pady=4)
 
-        self.compile_var = tkinter.IntVar(value=0)
+        self.generate_pdf_var = tkinter.IntVar(value=0)
         ctk.CTkCheckBox(
-            bottom, text="Compile to PDF", variable=self.compile_var
-        ).grid(row=2, column=0, columnspan=2, sticky="w", padx=10, pady=(0, 4))
+            bottom,
+            text="Generate PDF",
+            variable=self.generate_pdf_var,
+        ).grid(row=2, column=0, columnspan=2, padx=(10, 4), pady=(4, 0), sticky="w")
+
+        self.update_links_btn = ctk.CTkButton(
+            bottom, text="Update Links", width=120,
+            command=self._update_links, state="disabled"
+        )
+        self.update_links_btn.grid(row=3, column=0, padx=(10, 4), pady=(8, 4), sticky="w")
 
         self.generate_btn = ctk.CTkButton(
             bottom, text="Generate", width=110,
             command=self._generate, state="disabled"
         )
-        self.generate_btn.grid(row=2, column=2, padx=(4, 10), pady=(0, 4))
+        self.generate_btn.grid(row=3, column=1, padx=(4, 10), pady=(8, 4), sticky="w")
 
         self.status_label = ctk.CTkLabel(
             bottom, text="Status: Ready", anchor="w",
             font=ctk.CTkFont(size=12)
         )
         self.status_label.grid(
-            row=3, column=0, columnspan=3, sticky="ew", padx=10, pady=(0, 8)
+            row=4, column=0, columnspan=3, sticky="ew", padx=10, pady=(0, 8)
         )
 
     # ------------------------------------------------------------------
     # File open
     # ------------------------------------------------------------------
 
-    def _open_file(self):
+    def _open_source_file(self):
         path = filedialog.askopenfilename(
-            title="Open LaTeX Resume",
+            title="Open LaTeX Source File",
             filetypes=[("LaTeX files", "*.tex"), ("All files", "*.*")],
         )
         if not path:
             return
-        self._set_status("Parsing…")
+
+        self._set_status("Parsing source file…")
         try:
-            self.doc = parse_file(path)
+            parsed_source = parse_file(path)
         except Exception as exc:
             messagebox.showerror("Parse error", str(exc))
             self._set_status(f"Error: {exc}")
             return
 
-        self.file_path = path
-        self.file_label.configure(text=path)
+        source_path = os.path.abspath(path)
+        keep_library = self.link_library is not None and self.link_library.source_path == source_path
+        if keep_library:
+            self.doc = merge_source_document(parsed_source, self.link_library.source_file)
+        else:
+            self.doc = parsed_source
+            self.link_library = None
+            self.library_path = None
 
-        # Default output folder and name beside the source file
-        source_dir = os.path.dirname(path)
-        source_name = os.path.splitext(os.path.basename(path))[0]
-        self.output_dir_entry.delete(0, "end")
-        self.output_dir_entry.insert(0, source_dir)
-        self.output_name_entry.delete(0, "end")
-        self.output_name_entry.insert(0, source_name + "_output.tex")
+        self.file_path = source_path
+        self.file_label.configure(text=f"Source: {source_path}")
+        if keep_library and self.library_path:
+            self.library_label.configure(text=f"Library: {self.library_path}")
+        else:
+            self.library_label.configure(text="Library: none")
+
+        self._set_default_output_fields(source_path)
 
         self._build_tree()
-        self.generate_btn.configure(state="normal")
-        self._set_status("Ready")
+        self._set_controls_enabled(True)
+        self._set_status("Source loaded")
+
+    def _open_link_library(self):
+        path = filedialog.askopenfilename(
+            title="Open Link Library",
+            filetypes=[("Link libraries", "*.json"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+
+        self._set_status("Loading link library…")
+        try:
+            library = load_link_library(path)
+        except Exception as exc:
+            messagebox.showerror("Library error", str(exc))
+            self._set_status(f"Error: {exc}")
+            return
+
+        source_path = library.source_path or library.source_file.path
+        loaded_source: SourceFile | None = None
+        if source_path and os.path.exists(source_path):
+            try:
+                loaded_source = merge_source_document(parse_file(source_path), library.source_file)
+            except Exception:
+                loaded_source = None
+
+        if loaded_source is None:
+            loaded_source = SourceFile.from_dict(library.source_file.to_dict()) or library.source_file
+
+        self.link_library = library
+        self.library_path = os.path.abspath(path)
+        self.doc = loaded_source
+        if source_path:
+            self.file_path = self.doc.path or os.path.abspath(source_path)
+        else:
+            self.file_path = self.doc.path or None
+
+        if self.file_path:
+            self.file_label.configure(text=f"Source: {self.file_path}")
+        else:
+            self.file_label.configure(text="Source: unavailable")
+        self.library_label.configure(text=f"Library: {self.library_path}")
+
+        self._set_default_output_fields(source_path)
+
+        self._build_tree()
+        self._set_controls_enabled(True)
+        self._set_status("Link library loaded")
 
     # ------------------------------------------------------------------
     # Tree building
@@ -286,17 +364,32 @@ class App(ctk.CTk):
         )
 
     # ------------------------------------------------------------------
-    # Browse output folder
+    # Generate / update
     # ------------------------------------------------------------------
 
-    def _browse_output_dir(self):
-        initial_dir = self.output_dir_entry.get().strip()
-        if not initial_dir:
-            if self.file_path:
-                initial_dir = os.path.dirname(self.file_path)
-            else:
-                initial_dir = os.getcwd()
+    def _set_controls_enabled(self, enabled: bool):
+        state = "normal" if enabled else "disabled"
+        self.update_links_btn.configure(state=state)
+        self.generate_btn.configure(state=state)
 
+    def _set_default_output_fields(self, source_path: str | None):
+        if source_path:
+            source_dir = os.path.dirname(source_path)
+            source_name = os.path.splitext(os.path.basename(source_path))[0]
+        else:
+            source_dir = os.getcwd()
+            source_name = "generated"
+
+        self.output_dir_entry.delete(0, "end")
+        self.output_dir_entry.insert(0, source_dir)
+
+        self.output_name_entry.delete(0, "end")
+        self.output_name_entry.insert(0, f"{source_name}_generated.tex")
+
+    def _browse_output_dir(self):
+        initial_dir = self.output_dir_entry.get().strip() or (
+            os.path.dirname(self.file_path) if self.file_path else os.getcwd()
+        )
         path = filedialog.askdirectory(
             title="Select output folder",
             initialdir=initial_dir,
@@ -304,10 +397,6 @@ class App(ctk.CTk):
         if path:
             self.output_dir_entry.delete(0, "end")
             self.output_dir_entry.insert(0, path)
-
-    # ------------------------------------------------------------------
-    # Generate
-    # ------------------------------------------------------------------
 
     def _sync_model(self):
         """Push UI checkbox states back into the document model."""
@@ -320,18 +409,63 @@ class App(ctk.CTk):
                     self.entry_vars.get((si, ei), tkinter.IntVar(value=1)).get()
                 )
 
+    def _ensure_library(self) -> LinkLibrary | None:
+        if not self.doc:
+            return None
+        if self.link_library is None:
+            self.link_library = LinkLibrary.empty_for_source(self.doc)
+            self.library_path = default_link_library_path(self.doc.path)
+        return self.link_library
+
+    def _update_links(self):
+        if not self.doc:
+            messagebox.showwarning("No source file", "Please upload a source file first.")
+            return
+
+        self._sync_model()
+        library = self._ensure_library()
+        if library is None:
+            return
+
+        try:
+            update_library_source_file(library, self.doc)
+        except Exception as exc:
+            messagebox.showerror("Update error", str(exc))
+            self._set_status(f"Error: {exc}")
+            return
+
+        saved_path = save_link_library(library, self.library_path)
+        self.library_path = saved_path
+        self.link_library = library
+        self.library_label.configure(text=f"Library: {saved_path}")
+        self._set_status(f"Links updated: {saved_path}")
+
     def _generate(self):
-        if not self.doc or self._generating:
+        if not self.doc:
+            messagebox.showwarning("No source file", "Please upload a source file first.")
+            return
+
+        self._sync_model()
+        library = self._ensure_library()
+        if library is None:
+            return
+
+        try:
+            update_library_source_file(library, self.doc)
+        except Exception as exc:
+            messagebox.showerror("Update error", str(exc))
+            self._set_status(f"Error: {exc}")
             return
 
         output_dir = self.output_dir_entry.get().strip()
         output_name = self.output_name_entry.get().strip()
+        generate_pdf = bool(self.generate_pdf_var.get())
 
         if not output_dir:
-            messagebox.showwarning("No output folder", "Please specify an output folder.")
+            messagebox.showwarning("No output folder", "Please choose an output folder.")
             return
         if not output_name:
-            messagebox.showwarning("No output file name", "Please specify an output file name.")
+            messagebox.showwarning("No output file name", "Please choose an output file name.")
             return
         if os.path.basename(output_name) != output_name:
             messagebox.showwarning("Invalid file name", "Output file name must not include folder separators.")
@@ -343,52 +477,22 @@ class App(ctk.CTk):
             return
 
         output_path = os.path.join(output_dir, output_name)
-
-        self._sync_model()
-        tex_content = assemble(self.doc)
-
         try:
-            write_tex(tex_content, output_path)
+            generated_file = library.create_generated_file(output_path, generate_pdf=generate_pdf)
         except Exception as exc:
             messagebox.showerror("Write error", str(exc))
             self._set_status(f"Error: {exc}")
             return
+        library.add_generated_file(generated_file)
 
-        if not self.compile_var.get():
-            self._set_status(f"Written: {output_path}")
-            return
-
-        # Compile in background thread
-        self._generating = True
-        self.generate_btn.configure(state="disabled", text="Compiling…")
-        self._set_status("Compiling PDF…")
-
-        output_dir = os.path.dirname(os.path.abspath(output_path))
-
-        def _worker():
-            try:
-                success, log = compile_pdf(os.path.abspath(output_path), output_dir)
-            except FileNotFoundError:
-                self.after(0, lambda: self._on_compile_done(
-                    False, "pdflatex not found on PATH.\nInstall TeX Live or MiKTeX."
-                ))
-                return
-            self.after(0, lambda: self._on_compile_done(success, log))
-
-        threading.Thread(target=_worker, daemon=True).start()
-
-    def _on_compile_done(self, success: bool, log: str):
-        self._generating = False
-        self.generate_btn.configure(state="normal", text="Generate")
-
-        if success:
-            self._set_status("PDF compiled successfully.")
+        saved_path = save_link_library(library, self.library_path)
+        self.library_path = saved_path
+        self.link_library = library
+        self.library_label.configure(text=f"Library: {saved_path}")
+        if generate_pdf and generated_file.pdf_path:
+            self._set_status(f"Generated: {output_path} and {generated_file.pdf_path}")
         else:
-            self._set_status("Compilation failed — see details.")
-            messagebox.showerror(
-                "pdflatex error",
-                "Compilation failed. Last output:\n\n" + log[-2000:],
-            )
+            self._set_status(f"Generated: {output_path}")
 
     # ------------------------------------------------------------------
     # Helpers

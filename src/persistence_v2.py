@@ -44,19 +44,3 @@ def update_library_source_file(library: LinkLibrary, source_file: SourceFile) ->
 	library.update_source_file(source_file)
 	library.refresh_generated_files()
 	return library
-
-
-def next_generated_output_path(library: LinkLibrary, extension: str = ".tex") -> str:
-	"""Return a unique generated-file output path beside the source file."""
-	source_path = Path(library.source_path)
-	stem = source_path.stem
-	directory = source_path.parent
-
-	candidate = directory / f"{stem}_generated{extension}"
-	index = 2
-	while str(candidate) in library.links:
-		candidate = directory / f"{stem}_generated_{index}{extension}"
-		index += 1
-	return str(candidate)
-
-
