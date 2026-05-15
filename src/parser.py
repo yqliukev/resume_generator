@@ -169,7 +169,7 @@ def parse_standard_entries(
     Parse entries from a standard section (Work Experience / Projects / Education).
     Returns (list_prefix, entries, list_suffix).
     """
-    trigger_re = re.compile(r'\\resumeSubheading\b|\\resumeProjectHeading\b')
+    trigger_re = re.compile(r'\\resumeSubheading\b|\\resumeProjectHeading\b|\\resumeHeading\b')
 
     # Find trigger positions
     trigger_indices = [i for i, l in enumerate(content_lines) if trigger_re.search(l)]
@@ -237,7 +237,7 @@ def _build_standard_label(lines: list[str], trigger_idx: int, trigger: str) -> s
             return f"{title} @ {org}"
         elif groups:
             return strip_latex(groups[0])
-    else:  # resumeProjectHeading
+    else:  
         groups = extract_brace_groups(after_trigger, 2)
         if groups:
             return strip_latex(groups[0])

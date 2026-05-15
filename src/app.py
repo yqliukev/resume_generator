@@ -52,11 +52,10 @@ class App(ctk.CTk):
         top = ctk.CTkFrame(self, corner_radius=0)
         top.grid(row=0, column=0, sticky="ew", padx=8, pady=(8, 4))
 
-        top.grid_columnconfigure(2, weight=1)
-        top.grid_columnconfigure(4, weight=1)
+        top.grid_columnconfigure(1, weight=1)
 
         ctk.CTkButton(
-            top, text="Upload Source File", width=150, command=self._open_source_file
+            top, text="Upload File", width=150, command=self._choose_upload_target
         ).grid(row=0, column=0, padx=(8, 8), pady=6, sticky="w")
 
         self.refresh_btn = ctk.CTkButton(
@@ -65,14 +64,10 @@ class App(ctk.CTk):
         self.refresh_btn.grid(row=0, column=1, padx=(0, 8), pady=6, sticky="w")
 
         self.file_label = ctk.CTkLabel(top, text="Source: none", anchor="w")
-        self.file_label.grid(row=0, column=2, sticky="ew", padx=(0, 10), pady=6)
-
-        ctk.CTkButton(
-            top, text="Upload Link Library", width=170, command=self._open_link_library
-        ).grid(row=0, column=3, padx=(8, 8), pady=6, sticky="w")
+        self.file_label.grid(row=1, column=0, columnspan=2, sticky="ew", padx=8, pady=(0, 2))
 
         self.library_label = ctk.CTkLabel(top, text="Library: none", anchor="w")
-        self.library_label.grid(row=0, column=4, sticky="ew", padx=(0, 8), pady=6)
+        self.library_label.grid(row=2, column=0, columnspan=2, sticky="ew", padx=8, pady=(0, 6))
 
         # ── Main content (left tree | right preview) ─────────────────
         content = ctk.CTkFrame(self, corner_radius=0, fg_color="transparent")
@@ -156,6 +151,56 @@ class App(ctk.CTk):
     # ------------------------------------------------------------------
     # File open
     # ------------------------------------------------------------------
+
+    def _choose_upload_target(self):
+        popup = ctk.CTkToplevel(self)
+        popup.title("Choose upload type")
+        popup.geometry("360x170")
+        popup.resizable(False, False)
+        popup.transient(self)
+        popup.grab_set()
+
+        popup.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            popup,
+            text="Choose File Type",
+            font=ctk.CTkFont(size=14, weight="bold"),
+        ).grid(row=0, column=0, padx=20, pady=(20, 10), sticky="w")
+
+        button_row = ctk.CTkFrame(popup, fg_color="transparent")
+        button_row.grid(row=1, column=0, padx=20, pady=(8, 8), sticky="ew")
+        button_row.grid_columnconfigure(0, weight=1)
+        button_row.grid_columnconfigure(1, weight=1)
+
+        def choose_source():
+            popup.destroy()
+            self.after(0, self._open_source_file)
+
+        def choose_library():
+            popup.destroy()
+            self.after(0, self._open_link_library)
+
+        ctk.CTkButton(
+            button_row,
+            text="Source File",
+            command=choose_source,
+        ).grid(row=0, column=0, padx=(0, 8), sticky="ew")
+
+        ctk.CTkButton(
+            button_row,
+            text="Link Library",
+            command=choose_library,
+        ).grid(row=0, column=1, padx=(8, 0), sticky="ew")
+
+        ctk.CTkButton(
+            popup,
+            text="Cancel",
+            width=90,
+            command=popup.destroy,
+        ).grid(row=2, column=0, padx=20, pady=(4, 16), sticky="e")
+
+        popup.bind("<Escape>", lambda _event: popup.destroy())
 
     def _load_source_file(self, path: str, *, reset_output_fields: bool):
         self._set_status("Parsing source file…")

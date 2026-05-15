@@ -268,7 +268,7 @@ def merge_source_document(current: SourceFile, template: SourceFile | None = Non
 
     for current_section in current.sections:
         template_section = template_sections.get(current_section.name)
-        selected = template_section.selected if template_section is not None else False
+        selected = template_section.selected if template_section is not None else True
 
         template_entries = {
             entry.display_label: entry for entry in template_section.entries
@@ -277,7 +277,7 @@ def merge_source_document(current: SourceFile, template: SourceFile | None = Non
 
         for current_entry in current_section.entries:
             template_entry = template_entries.get(current_entry.display_label)
-            entry_selected = template_entry.selected if template_entry is not None else False
+            entry_selected = template_entry.selected if template_entry is not None else True
             merged_entries.append(
                 Entry(
                     display_label=current_entry.display_label,
@@ -387,7 +387,7 @@ class LinkLibrary:
             template_section = template_sections.get(source_section.name)
             selected = template_section.selected if template_section is not None else source_section.selected
             if template is not None and template_section is None:
-                selected = False
+                selected = True
 
             template_entries = {
                 entry.display_label: entry for entry in template_section.entries
@@ -398,7 +398,7 @@ class LinkLibrary:
                 template_entry = template_entries.get(source_entry.display_label)
                 entry_selected = template_entry.selected if template_entry is not None else source_entry.selected
                 if template is not None and template_entry is None:
-                    entry_selected = False
+                    entry_selected = True
 
                 entries.append(
                     Entry(
